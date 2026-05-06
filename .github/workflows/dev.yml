@@ -1,0 +1,33 @@
+name: DEV Backend CI/CD Deployment
+
+on:
+  push:
+    branches:
+      - server
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Backend Code
+        uses: actions/checkout@v3
+
+      - name: Deploy Backend to DEV Server
+        uses: appleboy/ssh-action@v0.1.9
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 2222
+          script: |
+            cd ~/petronet/backend/Petronet
+            
+            echo "Pulling latest server branch..."
+            git fetch origin
+            git reset --hard origin/server
+            
+            echo "Rebuilding docker..."
+            docker compose down
+            docker compose build --no-cache
+            docker compose up -d

@@ -1,0 +1,25 @@
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from app.database import Base
+
+class OutwardGatePassPhotoHistory(Base):
+    __tablename__ = "outward_gate_pass_photos_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # ✅ Corrected FK reference
+    outward_id = Column(Integer, ForeignKey("outward_gate_pass.id", ondelete="CASCADE"), nullable=False)
+
+    vehicle_photo = Column(String(255), nullable=False)
+    delivery_personnel_photo = Column(String(255), nullable=False)
+    delivery_personnel_id_photo = Column(String(255), nullable=False)
+    goods_photo = Column(String(255), nullable=False)
+    uploaded_by = Column(String(100), nullable=False)
+    uploaded_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # ✅ Corrected relationship
+    outward_gate_pass = relationship("OutwardGatePassHistory", back_populates="photos")
+
+    def __repr__(self):
+        return f"<OutwardGatePassPhotoHistory(id={self.id}, outward_id={self.outward_id}, uploaded_by='{self.uploaded_by}')>"

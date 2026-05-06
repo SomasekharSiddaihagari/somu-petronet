@@ -1,0 +1,239 @@
+from datetime import date
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
+
+from app.schemas.permit_management.composite_electrical_isolation_schema import (
+    CompositeElectricalIsolationPermitCreate,
+    CompositeElectricalIsolationPermitUpdate,
+)
+
+
+# =================================================
+# AUTO SERIAL NUMBER GENERATOR  (reuse same logic)
+# =================================================
+def generate_ceip_serial_number(db: Session, user_id: int) -> str:
+
+    station_query = text(
+        """
+        SELECT s.station_code
+        FROM users u
+        JOIN station s ON s.station_id = u.station_id
+        WHERE u.user_id = :user_id
+          AND u.is_deleted = FALSE
+    """
+    )
+    station = db.execute(station_query, {"user_id": user_id}).mappings().first()
+
+    if not station:
+        raise HTTPException(status_code=400, detail="Station not found for this user")
+
+    station_code = station["station_code"]
+
+    today = date.today()
+    if today.month >= 4:
+        fy = f"{today.year}-{str(today.year + 1)[-2:]}"
+    else:
+        fy = f"{today.year - 1}-{str(today.year)[-2:]}"
+
+    count_query = text(
+        """
+        SELECT COUNT(*) as cnt
+        FROM composite_electrical_isolation_permit
+        WHERE work_permit_number LIKE :pattern
+    """
+    )
+    result = (
+        db.execute(count_query, {"pattern": f"EIP/{station_code}/{fy}/%"})
+        .mappings()
+        .first()
+    )
+
+    next_seq = (result["cnt"] or 0) + 1
+    sequence = str(next_seq).zfill(3)
+
+    return f"EIP/{station_code}/{fy}/{sequence}"
+
+
+# =================================================
+# INSERT HISTORY SNAPSHOT
+# =================================================
+def insert_composite_electrical_isolation_history(db: Session, ceip_id: int):
+    history_sql = text(
+        """
+        INSERT INTO composite_electrical_isolation_permit_history (
+            ceip_id,
+            composite_work_permit_id,
+            work_permit_number,
+            work_clearance_time,
+            work_clearance_date,
+            cross_reference_of_other_permit,
+            department_section_area,
+            equipment_number_to_be_isolated,
+            name_of_equipment_circuit,
+            description_of_work,
+            issuer_name,
+            issuer_designation,
+            issuer_signature,
+            status,
+            created_by,
+            equipment_circuit_no,
+            plant,
+            work_clearance_from_time,
+            work_clearance_from_date,
+            isolation_method,
+            loto_tag_device_no,
+            authorized_person_name,
+            designation,
+            signature,
+            created_at,
+            updated_at
+        )
+        SELECT
+            ceip_id,
+            composite_work_permit_id,
+            work_permit_number,
+            work_clearance_time,
+            work_clearance_date,
+            cross_reference_of_other_permit,
+            department_section_area,
+            equipment_number_to_be_isolated,
+            name_of_equipment_circuit,
+            description_of_work,
+            issuer_name,
+            issuer_designation,
+            issuer_signature,
+            status,
+            created_by,
+            equipment_circuit_no,
+            plant,
+            work_clearance_from_time,
+            work_clearance_from_date,
+            isolation_method,
+            loto_tag_device_no,
+            authorized_person_name,
+            designation,
+            signature,
+            created_at,
+            NOW()
+        FROM composite_electrical_isolation_permit
+        WHERE ceip_id = :ceip_id
+    """
+    )
+
+    db.execute(history_sql, {"ceip_id": ceip_id})
+
+
+# =================================================
+# CREATE (MAIN + HISTORY)
+# =================================================
+def create_electrical_isolation(
+    db: Session, data: CompositeElectricalIsolationPermitCreate
+):
+    payload = data.model_dump()
+
+    # ✅ Auto generate work_permit_number
+    payload["work_permit_number"] = generate_ceip_serial_number(
+        db, payload["created_by"]
+    )
+
+    insert_sql = text(
+        """
+        INSERT INTO composite_electrical_isolation_permit (
+            composite_work_permit_id,
+            work_permit_number,
+            work_clearance_time,
+            work_clearance_date,
+            cross_reference_of_other_permit,
+            department_section_area,
+            equipment_number_to_be_isolated,
+            name_of_equipment_circuit,
+            description_of_work,
+            issuer_name,
+            issuer_designation,
+            issuer_signature,
+            status,
+            created_by,
+            equipment_circuit_no,
+            plant,
+            work_clearance_from_time,
+            work_clearance_from_date,
+            isolation_method,
+            loto_tag_device_no,
+            authorized_person_name,
+            designation,
+            signature,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            :composite_work_permit_id,
+            :work_permit_number,
+            :work_clearance_time,
+            :work_clearance_date,
+            :cross_reference_of_other_permit,
+            :department_section_area,
+            :equipment_number_to_be_isolated,
+            :name_of_equipment_circuit,
+            :description_of_work,
+            :issuer_name,
+            :issuer_designation,
+            :issuer_signature,
+            :status,
+            :created_by,
+            :equipment_circuit_no,
+            :plant,
+            :work_clearance_from_time,
+            :work_clearance_from_date,
+            :isolation_method,
+            :loto_tag_device_no,
+            :authorized_person_name,
+            :designation,
+            :signature,
+            NOW(),
+            NOW()
+        )
+        RETURNING ceip_id
+    """
+    )
+
+    result = db.execute(insert_sql, payload)
+    ceip_id = result.scalar()
+
+    insert_composite_electrical_isolation_history(db, ceip_id)
+
+    db.commit()
+
+    return {"ceip_id": ceip_id, "work_permit_number": payload["work_permit_number"]}
+
+
+# =================================================
+# UPDATE (MAIN + HISTORY)
+# =================================================
+def update_electrical_isolation(
+    db: Session, ceip_id: int, data: CompositeElectricalIsolationPermitUpdate
+):
+    payload = data.model_dump(exclude_unset=True)
+
+    if not payload:
+        return False
+
+    set_clause = ", ".join([f"{k} = :{k}" for k in payload.keys()])
+
+    update_sql = text(
+        f"""
+        UPDATE composite_electrical_isolation_permit
+        SET {set_clause},
+            updated_at = NOW()
+        WHERE ceip_id = :ceip_id
+    """
+    )
+
+    payload["ceip_id"] = ceip_id
+    db.execute(update_sql, payload)
+
+    insert_composite_electrical_isolation_history(db, ceip_id)
+
+    db.commit()
+
+    return True

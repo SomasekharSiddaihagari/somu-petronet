@@ -1,0 +1,107 @@
+name: Production Backend Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, backend-prod-cloud]
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Deploy Backend
+        run: |
+          set -e -o pipefail
+
+          VM1="backend-vm1.internal"
+          VM2="backend-vm2.internal"
+          DB="db.internal"
+
+          echo "===== START BACKEND DEPLOY ====="
+
+          ############################################
+          # DB BACKUP
+          ############################################
+          echo "DB backup started"
+
+          ssh ubuntu@$DB "
+            set -e
+            sudo -u postgres mkdir -p /var/lib/postgresql/backups
+            sudo -u postgres pg_dump -Fc Petronet \
+            -f /var/lib/postgresql/backups/petronet_\$(date +%F_%H-%M).dump
+          "
+
+          echo "DB backup done"
+
+          ############################################
+          # DEPLOY FUNCTION
+          ############################################
+          deploy_vm () {
+
+            SERVER=$1
+            MIGRATE=$2
+
+            echo "--------------------------------------"
+            echo "Deploying backend on $SERVER"
+            echo "--------------------------------------"
+
+            ssh ubuntu@$SERVER "
+              set -e
+              cd /opt/petronet-cdp/backend
+              git fetch --all
+              git reset --hard origin/server
+              git clean -fd
+
+              cd /opt/petronet-cdp
+              docker compose build backend
+              docker compose stop backend || true
+              docker compose rm -f backend || true
+              docker compose up -d backend
+              sleep 25
+            "
+
+            if [ \"$MIGRATE\" = \"yes\" ]; then
+              echo "Running migration on $SERVER"
+
+              ssh ubuntu@$SERVER "
+                set -e
+                cd /opt/petronet-cdp
+                BACKEND=\$(docker ps --format '{{.Names}}' | grep backend | head -n1)
+
+                if [ -z \"\$BACKEND\" ]; then
+                  echo 'Backend container not found'
+                  exit 1
+                fi
+
+                docker exec \$BACKEND alembic upgrade head
+              "
+            fi
+
+            ############################################
+            # HEALTH CHECK
+            ############################################
+            echo "Health check on $SERVER"
+
+            for i in {1..5}; do
+              if curl -fs http://$SERVER:8000/healthz > /dev/null; then
+                echo "Health check passed on $SERVER"
+                return
+              fi
+              sleep 5
+            done
+
+            echo "Health check FAILED on $SERVER"
+            exit 1
+          }
+
+          ############################################
+          # ROLLING DEPLOY
+          ############################################
+          deploy_vm $VM1 yes
+          deploy_vm $VM2 no
+
+          echo "===== BACKEND DEPLOY SUCCESS ====="
