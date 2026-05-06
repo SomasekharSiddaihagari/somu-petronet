@@ -100,8 +100,12 @@ def save_employee_performance(db: Session, appraisals: list, login_user_id: int)
         "message": "Appraisal saved successfully"
     }
 
-def get_appraisal_dashboard(db: Session):
-    # 🔹 Filter for Terminated Employees
+def get_appraisal_dashboard(db: Session, year: str = None):
+    params = {}
+    year_filter = ""
+    user_joining_filter = ""
+    
+    # 🔹 Exclude terminated employees
     termination_filter = """
         AND NOT EXISTS (
             SELECT 1 FROM disciplinary_incidents di 
@@ -111,44 +115,165 @@ def get_appraisal_dashboard(db: Session):
         )
     """
 
-    # 🔹 Total Employees (Active & Not Terminated)
-    total_emp = db.execute(text(f"""
-        SELECT COUNT(*) FROM users u 
-        WHERE u.is_deleted = FALSE
-          AND u.is_employee = TRUE
-          {termination_filter}
-    """)).scalar()
+    if year:
+        start_year, end_year = year.split("-")
+        params["start_year"] = int(start_year)
+        params["end_year"] = int(end_year)
 
-    # 🔹 Total Appraisals Entered (Exclude Deleted & Terminated)
-    total_done = db.execute(text(f"""
-        SELECT COUNT(DISTINCT ep.user_id) 
-        FROM employee_performance ep
-        JOIN users u ON u.user_id = ep.user_id
-        WHERE ep.is_deleted = FALSE 
-          AND u.is_deleted = FALSE
-          {termination_filter}
-    """)).scalar()
+        year_filter = """
+            AND EXTRACT(YEAR FROM ep.appraisal_start_date) = :start_year
+            AND EXTRACT(YEAR FROM ep.appraisal_end_date) = :end_year
+        """
+        user_joining_filter = " AND u.date_of_joining <= MAKE_DATE(:end_year, 3, 31)"
 
-    # 🔹 Station-wise count (Exclude Deleted & Terminated)
-    station_data = db.execute(text(f"""
-        SELECT 
-            s.station_name,
-            COUNT(DISTINCT u.user_id) AS total_emp,
-            COUNT(DISTINCT ea.user_id) AS appraisal_done
+        # 🔹 Unified Query using CTEs for historical accuracy
+        base_query = f"""
+        WITH latest_promotion AS (
+            SELECT DISTINCT ON (user_id)
+                user_id, new_grade AS grade, new_designation AS designation, 1 as priority
+            FROM promotions
+            WHERE effective_date <= MAKE_DATE(:end_year, 3, 31) AND is_deleted = FALSE
+            ORDER BY user_id, effective_date DESC
+        ),
+        earliest_future_promotion AS (
+            SELECT DISTINCT ON (user_id)
+                user_id, current_grade AS grade, current_designation AS designation, 2 as priority
+            FROM promotions
+            WHERE effective_date > MAKE_DATE(:end_year, 3, 31) AND is_deleted = FALSE
+            ORDER BY user_id, effective_date ASC
+        ),
+        combined_promotion AS (
+            SELECT DISTINCT ON (user_id) *
+            FROM (SELECT * FROM latest_promotion UNION ALL SELECT * FROM earliest_future_promotion) as combined
+            ORDER BY user_id, priority ASC
+        ),
+        latest_transfer AS (
+            SELECT DISTINCT ON (user_id)
+                user_id, new_station AS station_id, 1 as priority
+            FROM employee_transfers
+            WHERE effective_date <= MAKE_DATE(:end_year, 3, 31) AND is_deleted = FALSE
+            ORDER BY user_id, effective_date DESC
+        ),
+        earliest_future_transfer AS (
+            SELECT DISTINCT ON (user_id)
+                user_id, current_station AS station_id, 2 as priority
+            FROM employee_transfers
+            WHERE effective_date > MAKE_DATE(:end_year, 3, 31) AND is_deleted = FALSE
+            ORDER BY user_id, effective_date ASC
+        ),
+        combined_transfer AS (
+            SELECT DISTINCT ON (user_id) *
+            FROM (SELECT * FROM latest_transfer UNION ALL SELECT * FROM earliest_future_transfer) as combined
+            ORDER BY user_id, priority ASC
+        ),
+        latest_supervisor_history AS (
+            SELECT DISTINCT ON (user_id)
+                user_id, supervisor_id
+            FROM users_history
+            WHERE history_created_at <= MAKE_DATE(:end_year, 3, 31)
+            ORDER BY user_id, history_created_at DESC
+        )
+        SELECT
+            u.user_id,
+            u.employee_code,
+            TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name,
+            COALESCE(cp.grade, u.grade) AS grade,
+            COALESCE(cp.designation, u.designation) AS designation,
+            COALESCE(s_hist.station_name, s_curr.station_name) AS station_name,
+            -- Historical Supervisor Fallback
+            TRIM(COALESCE(hist_sup.first_name, sup.first_name, '') || ' ' || COALESCE(hist_sup.last_name, sup.last_name, '')) AS supervisor,
+            ep.appraisal_start_date,
+            ep.appraisal_end_date,
+            ep.annual_appraisal_rating,
+            ep.annual_rating_score,
+            ep.performance_id
         FROM users u
+        LEFT JOIN combined_promotion cp ON cp.user_id = u.user_id
+        LEFT JOIN combined_transfer ct ON ct.user_id = u.user_id
+        LEFT JOIN station s_hist ON ct.station_id = s_hist.station_id
+        LEFT JOIN station s_curr ON u.station_id = s_curr.station_id
+        LEFT JOIN users sup ON u.supervisor_id = sup.user_id
+        LEFT JOIN latest_supervisor_history lsh ON lsh.user_id = u.user_id
+        LEFT JOIN users hist_sup ON lsh.supervisor_id = hist_sup.user_id
+        LEFT JOIN employee_performance ep ON ep.user_id = u.user_id {year_filter} AND ep.is_deleted = FALSE
+        WHERE u.is_deleted = FALSE 
+          AND u.is_employee = TRUE
+          {user_joining_filter} 
+          {termination_filter}
+        ORDER BY (CASE WHEN ep.annual_appraisal_rating IS NULL THEN 0 ELSE 1 END), u.employee_code ASC
+        """
+    else:
+        # 🔹 Simple query for "All Years" (No year selected)
+        base_query = f"""
+        SELECT
+            u.user_id,
+            u.employee_code,
+            TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS name,
+            u.grade,
+            u.designation,
+            s.station_name,
+            TRIM(COALESCE(sup.first_name, '') || ' ' || COALESCE(sup.last_name, '')) AS supervisor,
+            ep.appraisal_start_date,
+            ep.appraisal_end_date,
+            ep.annual_appraisal_rating,
+            ep.annual_rating_score,
+            ep.performance_id
+        FROM users u
+        LEFT JOIN users sup ON u.supervisor_id = sup.user_id
         LEFT JOIN station s ON u.station_id = s.station_id
-        LEFT JOIN employee_performance ea 
-            ON ea.user_id = u.user_id AND ea.is_deleted = FALSE
+        LEFT JOIN employee_performance ep ON ep.user_id = u.user_id AND ep.is_deleted = FALSE
         WHERE u.is_deleted = FALSE
           AND u.is_employee = TRUE
           {termination_filter}
-        GROUP BY s.station_name
-        ORDER BY s.station_name
-    """)).mappings().all()
+        ORDER BY (CASE WHEN ep.annual_appraisal_rating IS NULL THEN 0 ELSE 1 END), u.employee_code ASC
+        """
+
+    result = db.execute(text(base_query), params).mappings().all()
+    
+    # 🔹 Aggregate data for Dashboard (Summary)
+    total_emp = len(result)
+    total_done = sum(1 for row in result if row.get("performance_id") is not None)
+    
+    station_map = {}
+    employee_list = []
+
+    for row in result:
+        item_dict = dict(row)
+        s_name = item_dict.get("station_name") or "Unknown"
+        
+        # 🔹 Update Station Summary
+        if s_name not in station_map:
+            station_map[s_name] = {"station_name": s_name, "total_emp": 0, "appraisal_done": 0}
+        
+        station_map[s_name]["total_emp"] += 1
+        if item_dict.get("performance_id"):
+            station_map[s_name]["appraisal_done"] += 1
+            
+        # 🔹 Fetch Attachments for the list
+        perf_id = item_dict.get("performance_id")
+        if perf_id:
+            docs_query = text("""
+                SELECT id, file_name, file_path 
+                FROM employee_performance_documents 
+                WHERE performance_id = :pid AND (is_deleted = FALSE OR is_deleted IS NULL)
+            """)
+            attachments = db.execute(docs_query, {"pid": perf_id}).mappings().all()
+            item_dict["attachments"] = [
+                {**dict(a), "file_path": make_download_url(a["file_path"])} 
+                for a in attachments
+            ]
+        else:
+            item_dict["attachments"] = []
+            
+        employee_list.append(item_dict)
 
     return {
-        "total": f"{total_done}/{total_emp}",
-        "stations": station_data
+        "summary": {
+            "total_emp": total_emp,
+            "total_done": total_done,
+            "station_data": sorted(list(station_map.values()), key=lambda x: x["station_name"])
+        },
+        "employee_list": employee_list
     }
 
 def get_performance_by_user(db: Session, user_id: int):

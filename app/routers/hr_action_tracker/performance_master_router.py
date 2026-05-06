@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException,File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException,File, UploadFile, Form, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -84,9 +84,12 @@ def save_appraisal(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-@router.get("/appraisal-dashboard")
-def appraisal_dashboard(db: Session = Depends(get_db)):
-    return get_appraisal_dashboard(db)
+@router.get("/get-appraisal-dashboard")
+def get_appraisal_dashboard_router(
+    year: Optional[str] = Query(None, description="Appraisal year range e.g. 2025-2026"),
+    db: Session = Depends(get_db)
+):
+    return get_appraisal_dashboard(db, year)
 
 @router.get("/get-performance/{user_id}")
 def get_performance(
