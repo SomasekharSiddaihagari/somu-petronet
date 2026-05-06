@@ -290,7 +290,7 @@ def get_performance_by_id(db: Session, performance_id: int):
 
 #     result = db.execute(text(base_query), params).mappings().all()
 
-#     return result
+#     return result 
 
 def get_performance_list_filter(db: Session, year: str):
     params = {}
@@ -531,3 +531,5 @@ def delete_performance(db: Session, performance_id: int):
     
     db.commit()
     return result.rowcount > 0
+
+    # first comment
