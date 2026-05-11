@@ -5,7 +5,7 @@ from datetime import datetime
 import os
 import shutil
 
-from app.crud.hr_action_tracker.performance_master_crud import get_appraisal_dashboard, get_performance_by_user, get_performance_by_id, get_performance_list_filter, save_employee_performance, create_document, delete_performance
+from app.crud.hr_action_tracker.performance_master_crud import get_appraisal_dashboard, get_performance_by_user, get_performance_by_id, get_performance_list_filter, save_employee_performance, create_document, delete_performance, get_distinct_appraisal_years
 from app.database import get_db
 from app.schemas.hr_action_tracker.performance_master_schema import EmployeeAppraisalItem
 
@@ -90,6 +90,11 @@ def get_appraisal_dashboard_router(
     db: Session = Depends(get_db)
 ):
     return get_appraisal_dashboard(db, year)
+ 
+@router.get("/get-appraisal-years")
+def get_years(db: Session = Depends(get_db)):
+    return get_distinct_appraisal_years(db)
+
 
 @router.get("/get-performance/{user_id}")
 def get_performance(

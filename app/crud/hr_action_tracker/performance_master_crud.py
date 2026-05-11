@@ -657,4 +657,23 @@ def delete_performance(db: Session, performance_id: int):
     db.commit()
     return result.rowcount > 0
 
-    # first comment
+def get_distinct_appraisal_years(db: Session):
+    now = datetime.now()
+    current_year = now.year
+    
+    # In India, fiscal year is April to March.
+    # If we are in Jan, Feb, or March (month < 4), the current active fiscal year start is (current_year - 1).
+    # If we are in April or later (month >= 4), the current active fiscal year start is (current_year).
+    if now.month < 4:
+        max_year = current_year
+    else:
+        max_year = current_year + 1
+
+    start_year = 2018
+    years = []
+    for y in range(start_year, max_year):
+        years.append(f"{y}-{y+1}")
+    
+    # Return reversed so the most recent year is at the top of the dropdown
+    return sorted(years, reverse=True)
+                                                                   

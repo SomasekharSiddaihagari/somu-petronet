@@ -294,9 +294,9 @@ def get_by_user_transfers(db: Session, user_id: int):
 
 def acknowledge_hr_transfer(db: Session, id: int, user_id: int, payload: dict):
 
-    # 🔹 Step 1: Check record exists
+    # 🔹 Step 1: Check if record exists and belongs to this user
     check_query = text("""
-        SELECT id, acknowledgement
+        SELECT id, user_id, acknowledgement
         FROM employee_transfers
         WHERE id = :id
         AND is_deleted = FALSE
@@ -305,27 +305,35 @@ def acknowledge_hr_transfer(db: Session, id: int, user_id: int, payload: dict):
     record = db.execute(check_query, {"id": id}).mappings().first()
 
     if not record:
-        return {"status": False, "message": "Action not found"}
+        return {"status": False, "message": "Transfer record not found"}
+    
+    if record["user_id"] != user_id:
+        return {
+            "status": False, 
+            "message": f"User ID mismatch. This transfer belongs to user {record['user_id']}, but you provided {user_id}."
+        }
 
-    # 🔹 Step 3: Update only allowed fields
+    # 🔹 Step 3: Update the record
     update_query = text("""
         UPDATE employee_transfers
         SET 
             comments = :comments,           
             acknowledgement = :acknowledgement,
             actual_joining_date = :actual_joining_date
-        WHERE  user_id = :user_id and id = :id 
+        WHERE id = :id 
     """)
  
-    db.execute(update_query, {
+    result = db.execute(update_query, {
         "acknowledgement": payload.get("acknowledgement", True),
         "comments": payload.get("comments"),
         "actual_joining_date": payload.get("actual_joining_date"),
-        "user_id": user_id,
         "id": id
     })
 
     db.commit()
+
+    if result.rowcount == 0:
+        return {"status": False, "message": "Update failed. No rows were changed."}
 
     return {"status": True, "message": "Acknowledged successfully"}
 
