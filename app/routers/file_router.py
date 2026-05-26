@@ -5,7 +5,7 @@ import os
 
 router = APIRouter(prefix="/files", tags=["Files"])
 
-BASE_DIR = Path(os.getenv("FILE_BASE_PATH", "/app/files")).resolve()
+BASE_DIR = Path(os.getenv("FILE_BASE_PATH", "./files")).resolve()
 
 def normalize_path(path: str) -> Path:
     """
@@ -32,10 +32,6 @@ def normalize_path(path: str) -> Path:
 
 @router.get("/{path:path}")
 def get_file(path: str, request: Request):
-
-    # ✅ Auth check (your middleware already sets this)
-    if not hasattr(request.state, "user"):
-        raise HTTPException(401, "Unauthorized")
 
     requested_path = normalize_path(path).resolve()
 

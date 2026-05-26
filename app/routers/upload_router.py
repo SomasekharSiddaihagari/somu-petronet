@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 upload_router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
-UPLOADS_BASE_DIR = Path(os.getenv("UPLOAD_BASE_PATH", "/app/uploads")).resolve()
+UPLOADS_BASE_DIR = Path(os.getenv("UPLOAD_BASE_PATH", "./uploads")).resolve()
 
 
 def normalize_uploads_path(path: str) -> Path:
@@ -29,9 +29,6 @@ def normalize_uploads_path(path: str) -> Path:
 
 @upload_router.get("/{path:path}")
 def get_upload_file(path: str, request: Request):
-
-    if not hasattr(request.state, "user"):
-        raise HTTPException(401, "Unauthorized")
 
     requested_path = normalize_uploads_path(path).resolve()
 
